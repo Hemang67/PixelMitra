@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../core/security/secure_key_store.dart';
 
 enum AiProviderId { openAi, gemini }
