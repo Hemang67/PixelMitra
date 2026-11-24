@@ -16,7 +16,7 @@ class _PhotoEditorScreenState extends State<PhotoEditorScreen> {
       final decoded = img.decodeImage(await _file!.readAsBytes()); if (decoded == null) throw const FormatException();
       final rotated = img.copyRotate(decoded, angle: _turns * 90); final bytes = img.encodeJpg(rotated, quality: 92);
       final dir = await getTemporaryDirectory(); final out = File('${dir.path}/pixelmitra_${DateTime.now().millisecondsSinceEpoch}.jpg'); await out.writeAsBytes(bytes, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(out.path)], text: 'Edited with PixelMitra'));
+      await Share.shareXFiles([XFile(out.path)], text: 'Edited with PixelMitra');
       if (mounted) setState(() => _status = 'Export created and ready to share.');
     } catch (_) { if (mounted) setState(() => _status = 'Could not process this photo.'); }
     finally { if (mounted) setState(() => _busy = false); }
