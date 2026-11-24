@@ -1,0 +1,45 @@
+name: PixelMitra Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Android platform project
+        working-directory: mobile
+        run: flutter create --project-name pixelmitra --org com.hemang67 --platforms android .
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+      - name: Analyze and test
+        working-directory: mobile
+        run: |
+          flutter analyze
+          flutter test
+      - name: Build debug APK smoke test
+        working-directory: mobile
+        run: flutter build apk --debug
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixelmitra-debug-apk
+          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 7
