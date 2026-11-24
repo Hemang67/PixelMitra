@@ -3,6 +3,8 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'features/ai_connect/connect_screen.dart';
+import 'features/ai_connect/ai_studio_screen.dart';
+import 'features/video_editor/video_editor_screen.dart';
 import 'features/photo_editor/photo_editor_screen.dart';
 import 'features/updates/update_screen.dart';
 
@@ -47,7 +49,8 @@ class HomeScreen extends StatelessWidget {
       const SizedBox(height: 24),
       _FeatureCard(icon: Icons.photo_camera_back_outlined, title: 'Photo Editor', subtitle: 'Pick, rotate, adjust brightness and share offline.', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PhotoEditorScreen()))),
       _FeatureCard(icon: Icons.auto_awesome, title: 'AI Connect', subtitle: 'Use your own OpenAI and Gemini API keys.', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ConnectScreen()))),
-      const _FeatureCard(icon: Icons.movie_outlined, title: 'Video Studio', subtitle: 'Video playback foundation is being added; export tools are next.', onTap: null),
+      _FeatureCard(icon: Icons.auto_awesome_motion, title: 'AI Studio', subtitle: 'Generate creative prompts with OpenAI or Gemini.', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AiStudioScreen()))),
+      _FeatureCard(icon: Icons.movie_outlined, title: 'Video Studio', subtitle: 'Preview videos and select trim ranges offline.', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VideoEditorScreen()))),
       const SizedBox(height: 16),
       const Text('Your media stays on your device unless you explicitly choose to share it with an AI provider.', style: TextStyle(fontSize: 12)),
     ]),
