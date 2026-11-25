@@ -18,6 +18,20 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
   String? _message;
   double _start = 0;
   double _end = 1;
+  bool _previewingSelection = false;
+
+  void _handlePlaybackProgress() {
+    final controller = _controller;
+    if (!_previewingSelection || controller == null || !controller.value.isInitialized) return;
+    final end = Duration(
+      milliseconds: (controller.value.duration.inMilliseconds * _end).round(),
+    );
+    if (controller.value.position >= end) {
+      _previewingSelection = false;
+      controller.removeListener(_handlePlaybackProgress);
+      controller.pause();
+    }
+  }
 
   Future<void> _choose() async {
     if (_loading) return;
@@ -38,6 +52,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       await next.initialize();
       await next.setLooping(false);
       final previous = _controller;
+      previous?.removeListener(_handlePlaybackProgress);
       if (!mounted) {
         await next.dispose();
         return;
@@ -46,6 +61,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
         _controller = next;
         _start = 0;
         _end = 1;
+        _previewingSelection = false;
       });
       await previous?.dispose();
     } catch (_) {
@@ -66,14 +82,21 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     final start = Duration(
       milliseconds: (duration.inMilliseconds * _start).round(),
     );
+    _previewingSelection = false;
+    controller.removeListener(_handlePlaybackProgress);
     await controller.pause();
     await controller.seekTo(start);
+    if (_end <= _start) return;
+    _previewingSelection = true;
+    controller.addListener(_handlePlaybackProgress);
     await controller.play();
   }
 
   Future<void> _togglePlayback() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
+    _previewingSelection = false;
+    controller.removeListener(_handlePlaybackProgress);
     if (controller.value.isPlaying) {
       await controller.pause();
     } else {
@@ -90,6 +113,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
 
   @override
   void dispose() {
+    _controller?.removeListener(_handlePlaybackProgress);
     _controller?.dispose();
     super.dispose();
   }
@@ -175,6 +199,8 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
               max: 1,
               divisions: 100,
               onChanged: (values) {
+                _previewingSelection = false;
+                controller.removeListener(_handlePlaybackProgress);
                 setState(() {
                   _start = values.start;
                   _end = values.end;
