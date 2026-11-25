@@ -30,6 +30,7 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       _previewingSelection = false;
       controller.removeListener(_handlePlaybackProgress);
       controller.pause();
+      if (mounted) setState(() {});
     }
   }
 
