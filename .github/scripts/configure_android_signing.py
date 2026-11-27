@@ -106,17 +106,17 @@ target.write_text(source, encoding="utf-8")
 print(f"Configured release signing in {target}")
 
 
-# Release-build workaround (documented from CI run #1): upstream Android Lint parser crash isolated to the
-# image_picker_android release lint task (JavaDocParser.parseDataItem
-# NoSuchMethodError). Flutter analyze/tests still run before packaging.
-root_gradle = Path("mobile/android/build.gradle")
-if root_gradle.exists():
-    root_source = root_gradle.read_text(encoding="utf-8")
-    marker = "// PixelMitra: workaround for upstream image_picker_android release lint crash"
-    if marker not in root_source:
-        root_source += """
-
-// PixelMitra: workaround for upstream image_picker_android release lint crash
+# Work around the upstream image_picker_android Android Lint parser crash
+# seen in release run #1 (JavaDocParser.parseDataItem NoSuchMethodError).
+# Flutter analyze and Flutter tests still run; only this third-party module's
+# failing release lint task is skipped.
+root_groovy = Path("mobile/android/build.gradle")
+root_kotlin = Path("mobile/android/build.gradle.kts")
+if root_groovy.exists():
+    root_gradle = root_groovy
+    marker = "// PixelMitra: image_picker_android release lint workaround"
+    workaround = """
+// PixelMitra: image_picker_android release lint workaround
 subprojects { subproject ->
     if (subproject.name == "image_picker_android") {
         subproject.tasks.configureEach { task ->
@@ -127,5 +127,27 @@ subprojects { subproject ->
     }
 }
 """
-        root_gradle.write_text(root_source, encoding="utf-8")
-        print("Disabled only the crashing image_picker_android release lint task.")
+elif root_kotlin.exists():
+    root_gradle = root_kotlin
+    marker = "// PixelMitra: image_picker_android release lint workaround"
+    workaround = """
+// PixelMitra: image_picker_android release lint workaround
+subprojects {
+    if (name == "image_picker_android") {
+        tasks.configureEach {
+            if (name == "lintVitalAnalyzeRelease") {
+                enabled = false
+            }
+        }
+    }
+}
+"""
+else:
+    raise SystemExit("Could not locate generated Android root Gradle build file")
+
+root_source = root_gradle.read_text(encoding="utf-8")
+if marker not in root_source:
+    root_gradle.write_text(root_source + "\\n" + workaround, encoding="utf-8")
+    print(f"Applied image_picker_android release lint workaround in {root_gradle}")
+else:
+    print(f"Image picker release lint workaround already present in {root_gradle}")
