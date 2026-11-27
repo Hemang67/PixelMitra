@@ -5,10 +5,7 @@ on:
     branches:
       - main
     paths:
-      - '.github/workflows/android-release.yml'
       - '.github/scripts/configure_android_signing.py'
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -25,7 +22,6 @@ concurrency:
 
 jobs:
   build-release:
-    if: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, 'ci: trigger signed release build') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
