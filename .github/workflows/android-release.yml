@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+    paths:
+      - '.github/workflows/android-release.yml'
+      - '.github/scripts/configure_android_signing.py'
   release:
     types: [published]
   workflow_dispatch:
@@ -22,6 +27,7 @@ concurrency:
 
 jobs:
   build-release:
+    if: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, 'ci: trigger signed release build') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -47,10 +53,14 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
+          PUBSPEC_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          APP_VERSION="${PUBSPEC_VERSION%%+*}"
           if [ "$EVENT_NAME" = "release" ]; then
             TAG="$RELEASE_TAG"
-          elif [ "$EVENT_NAME" = "push" ]; then
+          elif [ "$EVENT_NAME" = "push" ] && [[ "$REF_NAME" == v* ]]; then
             TAG="$REF_NAME"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            TAG="v$APP_VERSION"
           else
             VERSION="${INPUT_VERSION#v}"
             TAG="v$VERSION"
@@ -60,8 +70,6 @@ jobs:
             echo "Expected a semantic version tag such as v1.0.0; got: $TAG"
             exit 1
           fi
-          PUBSPEC_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
-          APP_VERSION="${PUBSPEC_VERSION%%+*}"
           if [ "$VERSION" != "$APP_VERSION" ]; then
             echo "Release tag $TAG does not match mobile/pubspec.yaml version $PUBSPEC_VERSION"
             exit 1
