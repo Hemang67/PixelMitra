@@ -3,7 +3,8 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:video_trimmer/video_trimmer.dart';
 
 class VideoEditorScreen extends StatefulWidget {
   const VideoEditorScreen({super.key});
@@ -13,34 +14,24 @@ class VideoEditorScreen extends StatefulWidget {
 }
 
 class _VideoEditorScreenState extends State<VideoEditorScreen> {
-  VideoPlayerController? _controller;
-  bool _loading = false;
+  final Trimmer _trimmer = Trimmer();
+  String? _videoPath;
+  String? _exportedPath;
   String? _message;
-  double _start = 0;
-  double _end = 1;
-  bool _previewingSelection = false;
-
-  void _handlePlaybackProgress() {
-    final controller = _controller;
-    if (!_previewingSelection || controller == null || !controller.value.isInitialized) return;
-    final end = Duration(
-      milliseconds: (controller.value.duration.inMilliseconds * _end).round(),
-    );
-    if (controller.value.position >= end) {
-      _previewingSelection = false;
-      controller.removeListener(_handlePlaybackProgress);
-      controller.pause();
-      if (mounted) setState(() {});
-    }
-  }
+  double _startValue = 0;
+  double _endValue = 0;
+  bool _loading = false;
+  bool _saving = false;
+  bool _isPlaying = false;
 
   Future<void> _choose() async {
-    if (_loading) return;
+    if (_loading || _saving) return;
     setState(() {
       _loading = true;
       _message = null;
+      _exportedPath = null;
     });
-    VideoPlayerController? next;
+
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.video,
@@ -49,24 +40,15 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
       final path = result?.files.single.path;
       if (path == null) return;
 
-      next = VideoPlayerController.file(File(path));
-      await next.initialize();
-      await next.setLooping(false);
-      final previous = _controller;
-      previous?.removeListener(_handlePlaybackProgress);
-      if (!mounted) {
-        await next.dispose();
-        return;
-      }
+      await _trimmer.loadVideo(videoPath: path);
+      if (!mounted) return;
       setState(() {
-        _controller = next;
-        _start = 0;
-        _end = 1;
-        _previewingSelection = false;
+        _videoPath = path;
+        _startValue = 0;
+        _endValue = 0;
+        _isPlaying = false;
       });
-      await previous?.dispose();
     } catch (_) {
-      await next?.dispose();
       if (mounted) {
         setState(() => _message =
             'Unable to open this video. Try a supported MP4 or MOV file.');
@@ -76,149 +58,198 @@ class _VideoEditorScreenState extends State<VideoEditorScreen> {
     }
   }
 
-  Future<void> _previewTrim() async {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
-    final duration = controller.value.duration;
-    final start = Duration(
-      milliseconds: (duration.inMilliseconds * _start).round(),
-    );
-    _previewingSelection = false;
-    controller.removeListener(_handlePlaybackProgress);
-    await controller.pause();
-    await controller.seekTo(start);
-    if (_end <= _start) return;
-    _previewingSelection = true;
-    controller.addListener(_handlePlaybackProgress);
-    await controller.play();
-  }
-
   Future<void> _togglePlayback() async {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
-    _previewingSelection = false;
-    controller.removeListener(_handlePlaybackProgress);
-    if (controller.value.isPlaying) {
-      await controller.pause();
-    } else {
-      await controller.play();
-    }
-    if (mounted) setState(() {});
+    if (_videoPath == null || _saving) return;
+    final playing = await _trimmer.videoPlaybackControl(
+      startValue: _startValue,
+      endValue: _endValue,
+    );
+    if (mounted) setState(() => _isPlaying = playing);
   }
 
-  String _format(Duration value) {
-    final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '${value.inHours > 0 ? '${value.inHours}:' : ''}$minutes:$seconds';
+  Future<void> _export() async {
+    if (_videoPath == null || _saving) return;
+    final file = File(_videoPath!);
+    if (!await file.exists()) {
+      setState(() => _message = 'The selected video is no longer available.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _message = 'Exporting selected video…';
+      _exportedPath = null;
+    });
+
+    try {
+      await _trimmer.saveTrimmedVideo(
+        startValue: _startValue,
+        endValue: _endValue,
+        storageDir: StorageDir.applicationDocumentsDirectory,
+        videoFolderName: 'PixelMitra',
+        onSave: (outputPath) {
+          if (!mounted) return;
+          setState(() {
+            _saving = false;
+            _exportedPath = outputPath;
+            _message = outputPath == null
+                ? 'Export failed. Please try another video or selection.'
+                : 'Your trimmed video has been saved on this device.';
+          });
+        },
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _message = 'Export failed. Please try another video or selection.';
+        });
+      }
+    }
+  }
+
+  Future<void> _shareExport() async {
+    final path = _exportedPath;
+    if (path == null || !await File(path).exists()) return;
+    await Share.shareXFiles(
+      [XFile(path)],
+      text: 'Trimmed with PixelMitra',
+    );
+  }
+
+  String _formatMs(double milliseconds) {
+    final duration = Duration(milliseconds: milliseconds.round());
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '${duration.inHours > 0 ? '${duration.inHours}:' : ''}$minutes:$seconds';
   }
 
   @override
   void dispose() {
-    _controller?.removeListener(_handlePlaybackProgress);
-    _controller?.dispose();
+    _trimmer.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    final ready = controller != null && controller.value.isInitialized;
-    final duration = ready ? controller.value.duration : Duration.zero;
-    final position = ready ? controller.value.position : Duration.zero;
+    final hasVideo = _videoPath != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Video Studio')),
+      appBar: AppBar(
+        title: const Text('Video Studio'),
+        actions: [
+          if (_exportedPath != null)
+            IconButton(
+              tooltip: 'Share exported video',
+              onPressed: _shareExport,
+              icon: const Icon(Icons.share_outlined),
+            ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'Offline video preview',
+            'Trim your video',
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           const Text(
-            'Choose a video stored on your device. Preview and select a section '
-            'without uploading the original file.',
+            'Choose a video, adjust the trim handles, preview your selection '
+            'and export a separate trimmed copy. Your original video stays unchanged.',
           ),
-          const SizedBox(height: 16),
-          if (ready)
-            AspectRatio(
-              aspectRatio: controller.value.aspectRatio > 0
-                  ? controller.value.aspectRatio
-                  : 16 / 9,
-              child: VideoPlayer(controller),
+          const SizedBox(height: 18),
+          if (hasVideo)
+            Container(
+              constraints: const BoxConstraints(minHeight: 220, maxHeight: 360),
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: VideoViewer(trimmer: _trimmer),
             )
           else
-            const SizedBox(
+            Container(
               height: 220,
-              child: Center(child: Icon(Icons.movie_outlined, size: 70)),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Center(
+                child: Icon(Icons.movie_outlined, size: 72),
+              ),
             ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: _loading ? null : _choose,
-            icon: const Icon(Icons.video_library),
-            label: Text(_loading ? 'Opening…' : 'Choose video'),
+            onPressed: _loading || _saving ? null : _choose,
+            icon: const Icon(Icons.video_library_outlined),
+            label: Text(_loading ? 'Opening video…' : 'Choose video'),
           ),
-          if (ready) ...[
-            const SizedBox(height: 12),
-            Text('Playback: ${_format(position)} / ${_format(duration)}'),
-            VideoProgressIndicator(
-              controller,
-              allowScrubbing: true,
-              padding: const EdgeInsets.symmetric(vertical: 8),
+          if (hasVideo) ...[
+            const SizedBox(height: 20),
+            const Text(
+              'Select the section to keep',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 10),
+            TrimViewer(
+              trimmer: _trimmer,
+              viewerHeight: 64,
+              viewerWidth: MediaQuery.of(context).size.width - 40,
+              onChangeStart: (value) => _startValue = value,
+              onChangeEnd: (value) => _endValue = value,
+              onChangePlaybackState: (playing) {
+                if (mounted) setState(() => _isPlaying = playing);
+              },
+            ),
+            const SizedBox(height: 12),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _togglePlayback,
-                    icon: Icon(controller.value.isPlaying
-                        ? Icons.pause
-                        : Icons.play_arrow),
-                    label: Text(
-                        controller.value.isPlaying ? 'Pause' : 'Play'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _previewTrim,
-                    icon: const Icon(Icons.play_circle_outline),
-                    label: const Text('Preview selection'),
-                  ),
-                ),
+                Text('Start  ${_formatMs(_startValue)}'),
+                Text('End  ${_formatMs(_endValue)}'),
               ],
             ),
             const SizedBox(height: 12),
-            Text(
-              'Selected section: ${_format(Duration(milliseconds: (duration.inMilliseconds * _start).round()))}'
-              ' – ${_format(Duration(milliseconds: (duration.inMilliseconds * _end).round()))}',
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _togglePlayback,
+              icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+              label: Text(_isPlaying ? 'Pause preview' : 'Preview selection'),
             ),
-            RangeSlider(
-              values: RangeValues(_start, _end),
-              min: 0,
-              max: 1,
-              divisions: 100,
-              onChanged: (values) {
-                _previewingSelection = false;
-                controller.removeListener(_handlePlaybackProgress);
-                setState(() {
-                  _start = values.start;
-                  _end = values.end;
-                });
-              },
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _saving ? null : _export,
+              icon: const Icon(Icons.save_alt),
+              label: Text(_saving ? 'Exporting…' : 'Export trimmed video'),
             ),
-            const Text(
-              'The selected range can be previewed. Exporting/trimming the '
-              'video file is a separate feature and is not included in this preview workflow.',
-            ),
+            if (_saving) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(),
+            ],
+            if (_exportedPath != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _shareExport,
+                icon: const Icon(Icons.share),
+                label: const Text('Share trimmed video'),
+              ),
+            ],
           ],
           if (_message != null) ...[
-            const SizedBox(height: 12),
-            Text(_message!, style: TextStyle(
-              color: Theme.of(context).colorScheme.error,
-            )),
+            const SizedBox(height: 16),
+            Text(
+              _message!,
+              style: TextStyle(
+                color: _exportedPath != null
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
           ],
+          const SizedBox(height: 16),
+          const Text(
+            'Processing is performed locally on your device. PixelMitra does '
+            'not upload your video to an AI provider for trimming.',
+            style: TextStyle(fontSize: 12),
+          ),
         ],
       ),
     );
