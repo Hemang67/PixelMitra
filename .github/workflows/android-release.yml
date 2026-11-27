@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '.github/scripts/configure_android_signing.py'
+      - '.github/workflows/android-release.yml'
   workflow_dispatch:
     inputs:
       version:
