@@ -17,6 +17,7 @@ dependencies:
   share_plus: ^10.1.4
   image: ^4.7.2
   video_player: ^2.10.1
+  video_trimmer: ^6.0.0
   file_picker: ^10.3.7
   crypto: ^3.0.7
   url_launcher: ^6.3.2
