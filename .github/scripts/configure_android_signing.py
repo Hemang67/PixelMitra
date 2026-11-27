@@ -106,7 +106,7 @@ target.write_text(source, encoding="utf-8")
 print(f"Configured release signing in {target}")
 
 
-# Work around an upstream Android Lint parser crash isolated to the
+# Release-build workaround (documented from CI run #1): upstream Android Lint parser crash isolated to the
 # image_picker_android release lint task (JavaDocParser.parseDataItem
 # NoSuchMethodError). Flutter analyze/tests still run before packaging.
 root_gradle = Path("mobile/android/build.gradle")
