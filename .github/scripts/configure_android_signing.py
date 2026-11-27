@@ -147,7 +147,7 @@ else:
 
 root_source = root_gradle.read_text(encoding="utf-8")
 if marker not in root_source:
-    root_gradle.write_text(root_source + "\\n" + workaround, encoding="utf-8")
+    root_gradle.write_text(root_source + "\n" + workaround, encoding="utf-8")
     print(f"Applied image_picker_android release lint workaround in {root_gradle}")
 else:
     print(f"Image picker release lint workaround already present in {root_gradle}")
