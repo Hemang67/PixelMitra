@@ -4,16 +4,29 @@ on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix (for example 1.0.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: pixelmitra-release-${{ github.event.release.tag_name || github.ref_name || inputs.version }}
+  cancel-in-progress: false
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - uses: actions/setup-java@v4
         with:
@@ -24,6 +37,38 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Resolve and validate release version
+        id: release
+        working-directory: mobile
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            TAG="$REF_NAME"
+          else
+            VERSION="${INPUT_VERSION#v}"
+            TAG="v$VERSION"
+          fi
+          VERSION="${TAG#v}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Expected a semantic version tag such as v1.0.0; got: $TAG"
+            exit 1
+          fi
+          PUBSPEC_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          APP_VERSION="${PUBSPEC_VERSION%%+*}"
+          if [ "$VERSION" != "$APP_VERSION" ]; then
+            echo "Release tag $TAG does not match mobile/pubspec.yaml version $PUBSPEC_VERSION"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pubspec_version=$PUBSPEC_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Generate missing Flutter Android platform files
         working-directory: mobile
@@ -39,46 +84,115 @@ jobs:
           flutter analyze
           flutter test
 
-      - name: Decode Android signing keystore
+      - name: Validate and decode Android signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           test -n "$KEYSTORE_BASE64" || (echo 'Missing ANDROID_KEYSTORE_BASE64' && exit 1)
+          test -n "$STORE_PASSWORD" || (echo 'Missing ANDROID_KEYSTORE_PASSWORD' && exit 1)
+          test -n "$KEY_ALIAS" || (echo 'Missing ANDROID_KEY_ALIAS' && exit 1)
+          test -n "${{ secrets.ANDROID_KEY_PASSWORD }}" || (echo 'Missing ANDROID_KEY_PASSWORD' && exit 1)
           mkdir -p "$RUNNER_TEMP/android-signing"
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.p12"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.p12"
+          test -s "$RUNNER_TEMP/android-signing/release.p12"
+          keytool -list -keystore "$RUNNER_TEMP/android-signing/release.p12" \
+            -storetype PKCS12 -alias "$KEY_ALIAS" -storepass "$STORE_PASSWORD" >/dev/null
+          echo "Keystore file and requested alias validated."
 
       - name: Configure signing properties
         env:
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          test -n "$STORE_PASSWORD" || (echo 'Missing keystore password' && exit 1)
-          test -n "$KEY_ALIAS" || (echo 'Missing key alias' && exit 1)
           cat > mobile/android/key.properties <<EOF
           storePassword=$STORE_PASSWORD
           keyPassword=$KEY_PASSWORD
           keyAlias=$KEY_ALIAS
           storeFile=$RUNNER_TEMP/android-signing/release.p12
           EOF
+          chmod 600 mobile/android/key.properties
 
       - name: Configure release signing
         run: python3 .github/scripts/configure_android_signing.py
 
-      - name: Build signed APK
+      - name: Build signed release APK
         working-directory: mobile
         run: flutter build apk --release
 
-      - name: Prepare release assets
+      - name: Verify APK signature and signing identity
+        env:
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cp mobile/build/app/outputs/flutter-apk/app-release.apk "PixelMitra-${VERSION}-release.apk"
-          sha256sum "PixelMitra-${VERSION}-release.apk" > SHA256SUMS.txt
+          APK="mobile/build/app/outputs/flutter-apk/app-release.apk"
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee SIGNING-VERIFICATION.txt
+          EXPECTED="$(keytool -list -v -keystore "$RUNNER_TEMP/android-signing/release.p12" \
+            -storetype PKCS12 -alias "$KEY_ALIAS" -storepass "$STORE_PASSWORD" \
+            | awk '/SHA256:/{print $2; exit}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}' \
+            SIGNING-VERIFICATION.txt | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test -n "$EXPECTED" && test -n "$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "APK signer certificate does not match the configured keystore."
+            exit 1
+          fi
+          echo "APK signature verified; certificate matches the configured keystore." | tee -a SIGNING-VERIFICATION.txt
+
+      - name: Prepare release assets and notes
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          PUBSPEC_VERSION: ${{ steps.release.outputs.pubspec_version }}
+        run: |
+          APK_NAME="PixelMitra-${VERSION}-release.apk"
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk "$APK_NAME"
+          sha256sum "$APK_NAME" > SHA256SUMS.txt
+          APKANALYZER="$(find "$ANDROID_HOME" -type f -name apkanalyzer | head -n1)"
+          if [ -n "$APKANALYZER" ]; then
+            MIN_SDK="$("$APKANALYZER" manifest min-sdk "$APK_NAME")"
+          else
+            MIN_SDK="See APK manifest (not extracted by CI)"
+          fi
+          cat > RELEASE-NOTES.md <<EOF
+          ## PixelMitra v${VERSION}
+
+          - Android package version: ${PUBSPEC_VERSION}
+          - Minimum Android SDK: ${MIN_SDK}
+          - Release tag: ${TAG}
+          - Source commit: ${GITHUB_SHA}
+
+          ### Automated verification
+          - Flutter static analysis completed.
+          - Flutter automated tests passed.
+          - Signed Android release APK built.
+          - APK signature verified and signer certificate matched the configured release keystore.
+          - SHA-256 checksum is included as `SHA256SUMS.txt`.
+
+          ### Installation
+          1. Download `${APK_NAME}` to your Android device.
+          2. Open the downloaded APK and allow your browser or file manager to install unknown apps if Android asks.
+          3. Review the installation prompt and install PixelMitra.
+
+          ### Device-testing limitations
+          This build has passed the automated checks above. It has not been physically tested across Android devices as part of this GitHub Actions workflow. Please install and test on your device before relying on it. Camera, gallery, video processing, permissions, and device-specific behavior may vary by Android version and manufacturer.
+          EOF
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: PixelMitra v${{ steps.release.outputs.version }}
+          body_path: RELEASE-NOTES.md
+          draft: false
+          prerelease: false
+          make_latest: true
           files: |
             PixelMitra-*-release.apk
             SHA256SUMS.txt
+            SIGNING-VERIFICATION.txt
