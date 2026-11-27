@@ -30,8 +30,9 @@ void main() {
     await tester.tap(find.text('Video Studio'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Offline video preview'), findsOneWidget);
+    expect(find.text('Trim your video'), findsOneWidget);
     expect(find.text('Choose video'), findsOneWidget);
+    expect(find.text('Export trimmed video'), findsNothing);
   });
 
   testWidgets('update screen opens and offers a release check',
